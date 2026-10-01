@@ -1,17 +1,19 @@
 package com.naveedchaudhry.ordertracking;
 
-import com.naveedchaudhry.ordertracking.model.Order;
-import com.naveedchaudhry.ordertracking.model.OrderItem;
+import com.naveedchaudhry.ordertracking.dto.request.CreateOrderRequest;
+import com.naveedchaudhry.ordertracking.dto.request.OrderItemRequest;
+import com.naveedchaudhry.ordertracking.dto.request.UpdateOrderStatusRequest;
+import com.naveedchaudhry.ordertracking.dto.response.OrderResponse;
+import com.naveedchaudhry.ordertracking.exception.InvalidStatusTransitionException;
 import com.naveedchaudhry.ordertracking.model.OrderStatus;
-import com.naveedchaudhry.ordertracking.model.TrackingEvent;
-import com.naveedchaudhry.ordertracking.repository.OrderRepository;
-import com.naveedchaudhry.ordertracking.repository.TrackingEventRepository;
+import com.naveedchaudhry.ordertracking.service.OrderService;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @SpringBootApplication
 public class OrderTrackingApplication {
@@ -22,40 +24,34 @@ public class OrderTrackingApplication {
 
     // Temporary: verify the data layer works. We'll remove this in a later part.
     @Bean
-    CommandLineRunner demo(OrderRepository orders, TrackingEventRepository events) {
+    CommandLineRunner demo(OrderService orderService) {
         return args -> {
-            // Build an order with two items
-            Order order = new Order(
-                    "CUST-00042",
-                    "Ada Lovelace",
-                    "10 Analytical Ave, London",
-                    OrderStatus.CREATED,
-                    new BigDecimal("129.97"));
+            // Create an order through the service
+            var request = new CreateOrderRequest(
+                    "CUST-00042", "Ada Lovelace", "10 Analytical Ave, London",
+                    List.of(
+                            new OrderItemRequest("Wireless Mouse", 2, new BigDecimal("24.99")),
+                            new OrderItemRequest("Mechanical Keyboard", 1, new BigDecimal("79.99"))
+                    ));
+            OrderResponse created = orderService.createOrder(request);
+            System.out.println("Created order " + created.id()
+                    + " total=" + created.totalAmount() + " status=" + created.status());
 
-            // 2 x 24.99 = 49.98, plus 1 x 79.99  ->  129.97, the total above
-            order.addItem(new OrderItem("Wireless Mouse", 2, new BigDecimal("24.99")));
-            order.addItem(new OrderItem("Mechanical Keyboard", 1, new BigDecimal("79.99")));
+            // A legal move: CREATED -> CONFIRMED
+            orderService.updateOrderStatus(created.id(),
+                    new UpdateOrderStatusRequest(OrderStatus.CONFIRMED, "Warehouse A", "Payment verified"));
 
-            // Record the first tracking event
-            order.addTrackingEvent(
-                    new TrackingEvent(OrderStatus.CREATED, "Warehouse A", "Order placed"));
+            // An illegal move: CONFIRMED -> DELIVERED (should be rejected)
+            try {
+                orderService.updateOrderStatus(created.id(),
+                        new UpdateOrderStatusRequest(OrderStatus.DELIVERED, null, null));
+            } catch (InvalidStatusTransitionException ex) {
+                System.out.println("Correctly rejected: " + ex.getMessage());
+            }
 
-            // One save persists the order, its items, and its event (cascade)
-            Order saved = orders.save(order);
-            System.out.println("Saved order with id = " + saved.getId());
-
-            // Read it back
-            System.out.println("Total orders in DB: " + orders.count());
-            System.out.println("Orders for CUST-00042: "
-                    + orders.findByCustomerIdOrderByCreatedAtDesc("CUST-00042").size());
-
-            //The custom @Query
-            System.out.println("Orders above 100: " + orders.findOrdersAbove(new BigDecimal("100.00")).size());
-
-            // Read the tracking timeline
-            events.findByOrderIdOrderByTimestampAsc(saved.getId())
-                    .forEach(e -> System.out.println("  " + e.getTimestamp()
-                            + " → " + e.getStatus() + " @ " + e.getLocation()));
+            // The timeline so far
+            orderService.getTrackingHistory(created.id()).timeline()
+                    .forEach(e -> System.out.println("  " + e.timestamp() + " → " + e.status()));
         };
 
     }
